@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Tempus fugit</title>
 <style>
   :root {
@@ -18,9 +18,11 @@
     -webkit-user-select: none;
   }
 
-  body {
+  html, body {
     margin: 0;
-    min-height: 100vh;
+    padding: 0;
+    width: 100%;
+    height: 100%;
     background-color: var(--bg-dark);
     display: flex;
     justify-content: center;
@@ -35,9 +37,9 @@
     width: 460px;
     height: 590px;
     filter: drop-shadow(0 25px 35px rgba(0, 0, 0, 0.9));
-    transform: scale(1.35);
     transform-origin: center center;
     overflow: visible;
+    flex-shrink: 0;
   }
 
   .body-svg {
@@ -434,7 +436,7 @@
 </head>
 <body>
 
-<div class="metronome-wrapper">
+<div class="metronome-wrapper" id="metronomeWrapper">
   <svg class="body-svg" viewBox="0 0 350 590">
     <defs>
       <linearGradient id="bodyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
@@ -504,6 +506,26 @@
 </div>
 
 <script>
+  const wrapperEl = document.getElementById('metronomeWrapper');
+
+  function resizeMetronome() {
+    const baseWidth = 460;
+    const baseHeight = 590;
+    const margin = 16;
+    
+    const availableWidth = window.innerWidth - margin;
+    const availableHeight = window.innerHeight - margin;
+
+    const scaleX = availableWidth / baseWidth;
+    const scaleY = availableHeight / baseHeight;
+    const scale = Math.min(scaleX, scaleY);
+
+    wrapperEl.style.transform = `scale(${scale})`;
+  }
+
+  window.addEventListener('resize', resizeMetronome);
+  window.addEventListener('orientationchange', resizeMetronome);
+
   const MIN_BPM = 40;
   const MAX_BPM = 208;
 
@@ -697,7 +719,11 @@
     if (!isDraggingWeight) return;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     const pivotRect = pendulum.getBoundingClientRect();
-    const relativeY = (clientY - pivotRect.top) / 1.35;
+    
+    const wrapperRect = wrapperEl.getBoundingClientRect();
+    const currentScale = wrapperRect.height / 590;
+    
+    const relativeY = (clientY - pivotRect.top) / currentScale;
     setBpm(yToBpm(relativeY));
   }
 
@@ -874,6 +900,7 @@
 
   hubBtn.addEventListener('click', toggleMetronome);
 
+  resizeMetronome();
   updateUI();
 </script>
 </body>
