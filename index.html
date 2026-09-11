@@ -168,6 +168,11 @@
     z-index: 6;
   }
 
+  .weight.disabled {
+    cursor: not-allowed;
+    opacity: 1; /* Corrigé ici pour éviter la transparence */
+  }
+
   .weight-top-bar {
     width: 100%;
     height: 3px;
@@ -177,7 +182,7 @@
     border-top-right-radius: 2px;
   }
 
-  .weight:active {
+  .weight:not(.disabled):active {
     cursor: grabbing;
   }
 
@@ -307,7 +312,12 @@
     font-family: inherit;
   }
 
-  .touch-btn:hover, .touch-btn:active {
+  .touch-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+
+  .touch-btn:not(:disabled):hover, .touch-btn:not(:disabled):active {
     color: #ffffff;
   }
 
@@ -553,8 +563,9 @@
   let audioCtx = null;
   let nextNoteTime = 0.0;
   let timerID = null;
-  let startTime = 0;
   let animFrameReq = null;
+  let lastAnimTime = 0;
+  let currentPhase = 0;
 
   let isTransitioningBpm = false;
   let bpmTransitionAnim = null;
@@ -693,7 +704,7 @@
   }
 
   function handleTempoTextClick(e) {
-    if (isRunning) return;
+    if (isRunning || isStopping) return;
     e.stopPropagation();
     
     let currentCatIdx = 0;
@@ -728,6 +739,7 @@
   tempoText.addEventListener('click', handleTempoTextClick);
 
   function smoothTransitionToBpm(targetVal, isFastReset) {
+    if (isRunning || isStopping) return;
     if (isTransitioningBpm && bpmTransitionAnim) {
       cancelAnimationFrame(bpmTransitionAnim);
     }
@@ -738,6 +750,10 @@
     const duration = isFastReset ? 300 : 800;
 
     function animateBpmStep(now) {
+      if (isRunning || isStopping) {
+        isTransitioningBpm = false;
+        return;
+      }
       const elapsed = now - startTimeAnim;
       const progress = Math.min(1, elapsed / duration);
       const easeProgress = 1 - Math.pow(1 - progress, 3);
@@ -785,17 +801,15 @@
   }
 
   function setTargetBpmDirect(newBpm) {
+    if (isRunning || isStopping) return;
     targetBpm = Math.max(MIN_BPM, Math.min(MAX_BPM, newBpm));
-    if (!isRunning) {
-      bpm = targetBpm;
-      activeBpm = targetBpm;
-      updateUI(bpm);
-    } else {
-      updateUI(targetBpm);
-    }
+    bpm = targetBpm;
+    activeBpm = targetBpm;
+    updateUI(bpm);
   }
 
   function setTargetBpm(newBpm) {
+    if (isRunning || isStopping) return;
     if (isTransitioningBpm) {
       isTransitioningBpm = false;
       if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
@@ -806,6 +820,7 @@
   let isDraggingWeight = false;
 
   function handleWeightStart(e) {
+    if (isRunning || isStopping) return;
     if (isTransitioningBpm) {
       isTransitioningBpm = false;
       if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
@@ -815,7 +830,7 @@
   }
 
   function handleWeightMove(e) {
-    if (!isDraggingWeight) return;
+    if (!isDraggingWeight || isRunning || isStopping) return;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     const pivotRect = pendulum.getBoundingClientRect();
     
@@ -851,6 +866,7 @@
 
     const start = (e) => {
       e.preventDefault();
+      if (isRunning || isStopping) return;
       if (isTransitioningBpm) {
         isTransitioningBpm = false;
         if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
@@ -862,7 +878,12 @@
       let count = 0;
 
       holdTimer = setTimeout(() => {
+        if (isRunning || isStopping) return;
         accelInterval = setInterval(() => {
+          if (isRunning || isStopping) {
+            stop();
+            return;
+          }
           count++;
           if (count > 5) step = 3;
           if (count > 12) step = 8;
@@ -893,22 +914,24 @@
       if (document.activeElement.tagName === 'INPUT') return;
       e.preventDefault();
       toggleMetronome();
-    } else if (e.code === 'ArrowUp' || e.key === 'ArrowUp') {
-      if (document.activeElement.tagName === 'INPUT') return;
-      e.preventDefault();
-      if (isTransitioningBpm) {
-        isTransitioningBpm = false;
-        if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
+    } else if (!isRunning && !isStopping) {
+      if (e.code === 'ArrowUp' || e.key === 'ArrowUp') {
+        if (document.activeElement.tagName === 'INPUT') return;
+        e.preventDefault();
+        if (isTransitioningBpm) {
+          isTransitioningBpm = false;
+          if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
+        }
+        setTargetBpm(targetBpm - 1);
+      } else if (e.code === 'ArrowDown' || e.key === 'ArrowDown') {
+        if (document.activeElement.tagName === 'INPUT') return;
+        e.preventDefault();
+        if (isTransitioningBpm) {
+          isTransitioningBpm = false;
+          if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
+        }
+        setTargetBpm(targetBpm + 1);
       }
-      setTargetBpm(targetBpm - 1);
-    } else if (e.code === 'ArrowDown' || e.key === 'ArrowDown') {
-      if (document.activeElement.tagName === 'INPUT') return;
-      e.preventDefault();
-      if (isTransitioningBpm) {
-        isTransitioningBpm = false;
-        if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
-      }
-      setTargetBpm(targetBpm + 1);
     }
   });
 
@@ -958,11 +981,6 @@
   function scheduler() {
     if (isStopping) return;
     while (nextNoteTime < audioCtx.currentTime + 0.1) {
-      if (activeBpm !== targetBpm) {
-        activeBpm += (targetBpm > activeBpm) ? 1 : -1;
-      }
-      bpm = activeBpm;
-
       const isAccent = (currentBeat === 0);
       playSound(nextNoteTime, isAccent);
       currentBeat = (currentBeat + 1) % beatsPerMeasure;
@@ -973,11 +991,16 @@
 
   function animate() {
     if (isRunning) {
-      const elapsedTime = audioCtx.currentTime - startTime;
+      const now = audioCtx.currentTime;
+      if (lastAnimTime === 0) lastAnimTime = now;
+      const dt = now - lastAnimTime;
+      lastAnimTime = now;
+
       const omega = Math.PI * (bpm / 60);
+      currentPhase += omega * dt;
+
       const maxAngle = 10 + (240 - bpm) * (14 / 220);
-      const phase = elapsedTime * omega;
-      const currentAngle = Math.sin(phase) * maxAngle;
+      const currentAngle = Math.sin(currentPhase) * maxAngle;
 
       pendulum.style.transform = `rotate(${currentAngle}deg)`;
 
@@ -996,11 +1019,12 @@
       } else {
         isStopping = false;
         pendulum.style.transform = `rotate(0deg)`;
-        pendulum.style.filter = 'none';
+        weight.classList.remove('disabled');
+        slowerBtn.disabled = false;
+        fasterBtn.disabled = false;
       }
     } else {
       pendulum.style.transform = `rotate(0deg)`;
-      pendulum.style.filter = 'none';
     }
   }
 
@@ -1020,10 +1044,8 @@
     if (isRunning || isStopping) {
       if (isRunning) {
         clearTimeout(timerID);
-        const elapsedTime = audioCtx.currentTime - startTime;
-        const omega = Math.PI * (bpm / 60);
         const maxAngle = 10 + (240 - bpm) * (14 / 220);
-        stopStartAngle = Math.sin(elapsedTime * omega) * maxAngle;
+        stopStartAngle = Math.sin(currentPhase) * maxAngle;
         stopStartTime = audioCtx.currentTime;
         stopDuration = 60.0 / bpm * 1.5;
         
@@ -1033,6 +1055,9 @@
         isStopping = false;
         if (animFrameReq) cancelAnimationFrame(animFrameReq);
         pendulum.style.transform = `rotate(0deg)`;
+        weight.classList.remove('disabled');
+        slowerBtn.disabled = false;
+        fasterBtn.disabled = false;
       }
       hubBtn.style.borderColor = '#555660';
     } else {
@@ -1041,12 +1066,16 @@
       }
       isStopping = false;
       isRunning = true;
+      weight.classList.add('disabled');
+      slowerBtn.disabled = true;
+      fasterBtn.disabled = true;
       currentBeat = 0;
       activeBpm = targetBpm;
       bpm = targetBpm;
-      startTime = audioCtx.currentTime;
+      lastAnimTime = audioCtx.currentTime;
+      currentPhase = 0;
       const quarterPeriod = 30.0 / bpm;
-      nextNoteTime = startTime + quarterPeriod;
+      nextNoteTime = audioCtx.currentTime + quarterPeriod;
       scheduler();
       animFrameReq = requestAnimationFrame(animate);
       hubBtn.style.borderColor = '#ffffff';
