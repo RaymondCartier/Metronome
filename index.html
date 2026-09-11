@@ -79,9 +79,9 @@
 
   .scale-ladder {
     position: absolute;
-    top: 75px;
+    top: 70px;
     width: 170px;
-    height: 280px;
+    height: 300px;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -111,7 +111,7 @@
   .scale-number {
     position: absolute;
     right: 10px;
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 600;
     color: rgba(255, 255, 255, 0.75);
     font-variant-numeric: tabular-nums;
@@ -278,6 +278,12 @@
     color: #ffffff;
     margin-top: 2px;
     margin-bottom: 12px;
+    cursor: pointer;
+    transition: color 0.15s;
+  }
+
+  .tempo-name:hover {
+    color: #d0d0e0;
   }
 
   .btn-row {
@@ -526,23 +532,32 @@
   window.addEventListener('resize', resizeMetronome);
   window.addEventListener('orientationchange', resizeMetronome);
 
-  const MIN_BPM = 40;
-  const MAX_BPM = 208;
+  const MIN_BPM = 20;
+  const MAX_BPM = 240;
 
-  const MIN_Y = -355;
-  const MAX_Y = -75;
+  const MIN_Y = -380;
+  const MAX_Y = -60;
 
   let bpm = 80;
+  let targetBpm = 80;
+  let activeBpm = 80;
   let beatsPerMeasure = 4;
   let accentEnabled = false;
   let currentBeat = 0;
   let isRunning = false;
+  let isStopping = false;
+  let stopStartTime = 0;
+  let stopStartAngle = 0;
+  let stopDuration = 0;
 
   let audioCtx = null;
   let nextNoteTime = 0.0;
   let timerID = null;
   let startTime = 0;
   let animFrameReq = null;
+
+  let isTransitioningBpm = false;
+  let bpmTransitionAnim = null;
 
   const pendulum = document.getElementById('pendulum');
   const weight = document.getElementById('weight');
@@ -559,12 +574,12 @@
   const batDisplay = document.getElementById('batDisplay');
   const beatMenu = document.getElementById('beatMenu');
 
-  const bpmStepsTopToBottom = [40, 50, 60, 70, 80, 90, 100, 120, 138, 160, 184, 208];
-  const steps = [40, 50, 60, 70, 80, 90, 100, 120, 138, 160, 184, 208];
+  const bpmStepsTopToBottom = [20, 30, 40, 50, 60, 72, 80, 96, 112, 126, 144, 160, 184, 208, 240];
+  const steps = [20, 30, 40, 50, 60, 72, 80, 96, 112, 126, 144, 160, 184, 208, 240];
 
   function buildScale() {
     scaleLadder.innerHTML = '';
-    const totalSteps = 22;
+    const totalSteps = 28;
     for (let i = 0; i <= totalSteps; i++) {
       const stepEl = document.createElement('div');
       stepEl.className = 'scale-step';
@@ -649,7 +664,22 @@
     beatMenu.classList.remove('open');
   });
 
+  const tempoCategories = [
+    { name: 'Larghissimo', max: 30, targetBpm: 20 },
+    { name: 'Grave', max: 45, targetBpm: 35 },
+    { name: 'Largo', max: 60, targetBpm: 50 },
+    { name: 'Larghetto', max: 66, targetBpm: 63 },
+    { name: 'Adagio', max: 76, targetBpm: 70 },
+    { name: 'Andante', max: 108, targetBpm: 90 },
+    { name: 'Moderato', max: 120, targetBpm: 114 },
+    { name: 'Allegro', max: 156, targetBpm: 135 },
+    { name: 'Vivace', max: 176, targetBpm: 166 },
+    { name: 'Presto', max: 200, targetBpm: 188 },
+    { name: 'Prestissimo', max: 241, targetBpm: 220 }
+  ];
+
   function getTempoName(val) {
+    if (val < 30) return 'Larghissimo';
     if (val < 45) return 'Grave';
     if (val < 60) return 'Largo';
     if (val < 66) return 'Larghetto';
@@ -660,6 +690,70 @@
     if (val < 176) return 'Vivace';
     if (val < 200) return 'Presto';
     return 'Prestissimo';
+  }
+
+  function handleTempoTextClick(e) {
+    if (isRunning) return;
+    e.stopPropagation();
+    
+    let currentCatIdx = 0;
+    for (let i = 0; i < tempoCategories.length; i++) {
+      if (targetBpm < tempoCategories[i].max) {
+        currentCatIdx = i;
+        break;
+      }
+    }
+    
+    let nextCatIdx;
+    let isWrapAround = false;
+
+    if (e.shiftKey) {
+      nextCatIdx = currentCatIdx - 1;
+      if (nextCatIdx < 0) {
+        nextCatIdx = tempoCategories.length - 1;
+        isWrapAround = true;
+      }
+    } else {
+      nextCatIdx = currentCatIdx + 1;
+      if (nextCatIdx >= tempoCategories.length) {
+        nextCatIdx = 0;
+        isWrapAround = true;
+      }
+    }
+
+    const newTarget = tempoCategories[nextCatIdx].targetBpm;
+    smoothTransitionToBpm(newTarget, isWrapAround);
+  }
+
+  tempoText.addEventListener('click', handleTempoTextClick);
+
+  function smoothTransitionToBpm(targetVal, isFastReset) {
+    if (isTransitioningBpm && bpmTransitionAnim) {
+      cancelAnimationFrame(bpmTransitionAnim);
+    }
+
+    isTransitioningBpm = true;
+    const startBpm = targetBpm;
+    const startTimeAnim = performance.now();
+    const duration = isFastReset ? 300 : 800;
+
+    function animateBpmStep(now) {
+      const elapsed = now - startTimeAnim;
+      const progress = Math.min(1, elapsed / duration);
+      const easeProgress = 1 - Math.pow(1 - progress, 3);
+      
+      const currentVal = startBpm + (targetVal - startBpm) * easeProgress;
+      setTargetBpmDirect(Math.round(currentVal));
+
+      if (progress < 1) {
+        bpmTransitionAnim = requestAnimationFrame(animateBpmStep);
+      } else {
+        setTargetBpmDirect(targetVal);
+        isTransitioningBpm = false;
+      }
+    }
+
+    bpmTransitionAnim = requestAnimationFrame(animateBpmStep);
   }
 
   function bpmToY(val) {
@@ -684,33 +778,38 @@
     return Math.round(val);
   }
 
-  function updateUI() {
-    bpmDisplay.textContent = bpm;
-    tempoText.textContent = getTempoName(bpm);
-    weight.style.top = `${bpmToY(bpm)}px`;
+  function updateUI(displayVal) {
+    bpmDisplay.textContent = displayVal;
+    tempoText.textContent = getTempoName(displayVal);
+    weight.style.top = `${bpmToY(displayVal)}px`;
   }
 
-  function setBpm(newBpm) {
-    if (isRunning && audioCtx) {
-      const oldOmega = Math.PI * (bpm / 60);
-      const currentPhase = (audioCtx.currentTime - startTime) * oldOmega;
-      bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, newBpm));
-      const newOmega = Math.PI * (bpm / 60);
-      startTime = audioCtx.currentTime - (currentPhase / newOmega);
-      
-      const currentK = (currentPhase - Math.PI / 2) / Math.PI;
-      const nextK = Math.floor(currentK) + 1;
-      const nextPhase = nextK * Math.PI + Math.PI / 2;
-      nextNoteTime = startTime + (nextPhase / newOmega);
+  function setTargetBpmDirect(newBpm) {
+    targetBpm = Math.max(MIN_BPM, Math.min(MAX_BPM, newBpm));
+    if (!isRunning) {
+      bpm = targetBpm;
+      activeBpm = targetBpm;
+      updateUI(bpm);
     } else {
-      bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, newBpm));
+      updateUI(targetBpm);
     }
-    updateUI();
+  }
+
+  function setTargetBpm(newBpm) {
+    if (isTransitioningBpm) {
+      isTransitioningBpm = false;
+      if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
+    }
+    setTargetBpmDirect(newBpm);
   }
 
   let isDraggingWeight = false;
 
   function handleWeightStart(e) {
+    if (isTransitioningBpm) {
+      isTransitioningBpm = false;
+      if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
+    }
     isDraggingWeight = true;
     e.stopPropagation();
   }
@@ -724,7 +823,7 @@
     const currentScale = wrapperRect.height / 590;
     
     const relativeY = (clientY - pivotRect.top) / currentScale;
-    setBpm(yToBpm(relativeY));
+    setTargetBpm(yToBpm(relativeY));
   }
 
   function handleWeightEnd() {
@@ -746,26 +845,31 @@
   rodEl.addEventListener('click', toggleClick);
   rodBaseEl.addEventListener('click', toggleClick);
 
-  function setupLongPress(btn, delta) {
+  function setupLongPress(btn, deltaMultiplier) {
     let holdTimer = null;
     let accelInterval = null;
 
     const start = (e) => {
       e.preventDefault();
-      setBpm(bpm + delta);
+      if (isTransitioningBpm) {
+        isTransitioningBpm = false;
+        if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
+      }
+      setTargetBpm(targetBpm + deltaMultiplier);
 
-      let speed = 120;
+      let speed = 100;
       let step = 1;
       let count = 0;
 
       holdTimer = setTimeout(() => {
         accelInterval = setInterval(() => {
           count++;
-          if (count > 8) step = 2;
-          if (count > 20) step = 4;
-          setBpm(bpm + (delta > 0 ? step : -step));
+          if (count > 5) step = 3;
+          if (count > 12) step = 8;
+          if (count > 20) step = 15;
+          setTargetBpm(targetBpm + (deltaMultiplier > 0 ? step : -step));
         }, speed);
-      }, 300);
+      }, 250);
     };
 
     const stop = () => {
@@ -789,6 +893,22 @@
       if (document.activeElement.tagName === 'INPUT') return;
       e.preventDefault();
       toggleMetronome();
+    } else if (e.code === 'ArrowUp' || e.key === 'ArrowUp') {
+      if (document.activeElement.tagName === 'INPUT') return;
+      e.preventDefault();
+      if (isTransitioningBpm) {
+        isTransitioningBpm = false;
+        if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
+      }
+      setTargetBpm(targetBpm - 1);
+    } else if (e.code === 'ArrowDown' || e.key === 'ArrowDown') {
+      if (document.activeElement.tagName === 'INPUT') return;
+      e.preventDefault();
+      if (isTransitioningBpm) {
+        isTransitioningBpm = false;
+        if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
+      }
+      setTargetBpm(targetBpm + 1);
     }
   });
 
@@ -836,7 +956,13 @@
   }
 
   function scheduler() {
+    if (isStopping) return;
     while (nextNoteTime < audioCtx.currentTime + 0.1) {
+      if (activeBpm !== targetBpm) {
+        activeBpm += (targetBpm > activeBpm) ? 1 : -1;
+      }
+      bpm = activeBpm;
+
       const isAccent = (currentBeat === 0);
       playSound(nextNoteTime, isAccent);
       currentBeat = (currentBeat + 1) % beatsPerMeasure;
@@ -849,14 +975,29 @@
     if (isRunning) {
       const elapsedTime = audioCtx.currentTime - startTime;
       const omega = Math.PI * (bpm / 60);
-      
-      const maxAngle = 12 + (208 - bpm) * (14 / 168);
+      const maxAngle = 10 + (240 - bpm) * (14 / 220);
       const phase = elapsedTime * omega;
       const currentAngle = Math.sin(phase) * maxAngle;
 
       pendulum.style.transform = `rotate(${currentAngle}deg)`;
 
       animFrameReq = requestAnimationFrame(animate);
+    } else if (isStopping) {
+      const elapsed = audioCtx.currentTime - stopStartTime;
+      const progress = Math.min(1, elapsed / stopDuration);
+      
+      const dampingFactor = Math.exp(-4 * progress);
+      const currentAngle = stopStartAngle * dampingFactor * Math.cos(progress * Math.PI * 2.5);
+
+      pendulum.style.transform = `rotate(${currentAngle}deg)`;
+
+      if (progress < 1) {
+        animFrameReq = requestAnimationFrame(animate);
+      } else {
+        isStopping = false;
+        pendulum.style.transform = `rotate(0deg)`;
+        pendulum.style.filter = 'none';
+      }
     } else {
       pendulum.style.transform = `rotate(0deg)`;
       pendulum.style.filter = 'none';
@@ -876,19 +1017,33 @@
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
 
-    if (isRunning) {
-      isRunning = false;
-      clearTimeout(timerID);
-      if (animFrameReq) cancelAnimationFrame(animFrameReq);
-      pendulum.style.transform = `rotate(0deg)`;
-      pendulum.style.filter = 'none';
+    if (isRunning || isStopping) {
+      if (isRunning) {
+        clearTimeout(timerID);
+        const elapsedTime = audioCtx.currentTime - startTime;
+        const omega = Math.PI * (bpm / 60);
+        const maxAngle = 10 + (240 - bpm) * (14 / 220);
+        stopStartAngle = Math.sin(elapsedTime * omega) * maxAngle;
+        stopStartTime = audioCtx.currentTime;
+        stopDuration = 60.0 / bpm * 1.5;
+        
+        isRunning = false;
+        isStopping = true;
+      } else {
+        isStopping = false;
+        if (animFrameReq) cancelAnimationFrame(animFrameReq);
+        pendulum.style.transform = `rotate(0deg)`;
+      }
       hubBtn.style.borderColor = '#555660';
     } else {
       if (audioCtx.state === 'suspended') {
         audioCtx.resume();
       }
+      isStopping = false;
       isRunning = true;
       currentBeat = 0;
+      activeBpm = targetBpm;
+      bpm = targetBpm;
       startTime = audioCtx.currentTime;
       const quarterPeriod = 30.0 / bpm;
       nextNoteTime = startTime + quarterPeriod;
@@ -901,7 +1056,7 @@
   hubBtn.addEventListener('click', toggleMetronome);
 
   resizeMetronome();
-  updateUI();
+  updateUI(bpm);
 </script>
 </body>
 </html>
