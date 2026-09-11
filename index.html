@@ -688,9 +688,8 @@
     return 'Prestissimo';
   }
 
-  function handleTempoTextClick(e) {
+  function handleTempoTierChange(direction = 'next') {
     if (isRunning || isStopping) return;
-    e.stopPropagation();
     
     let currentCatIdx = 0;
     for (let i = 0; i < tempoCategories.length; i++) {
@@ -700,25 +699,31 @@
       }
     }
     
-    let nextCatIdx;
-    let isWrapAround = false;
+    let nextCatIdx = currentCatIdx;
 
-    if (e.shiftKey) {
-      nextCatIdx = currentCatIdx - 1;
-      if (nextCatIdx < 0) {
-        nextCatIdx = tempoCategories.length - 1;
-        isWrapAround = true;
+    if (direction === 'prev') {
+      if (currentCatIdx > 0) {
+        nextCatIdx = currentCatIdx - 1;
       }
     } else {
-      nextCatIdx = currentCatIdx + 1;
-      if (nextCatIdx >= tempoCategories.length) {
-        nextCatIdx = 0;
-        isWrapAround = true;
+      if (currentCatIdx < tempoCategories.length - 1) {
+        nextCatIdx = currentCatIdx + 1;
       }
     }
 
+    if (nextCatIdx === currentCatIdx) {
+      stopTierHold();
+      return;
+    }
+
     const newTarget = tempoCategories[nextCatIdx].targetBpm;
-    smoothTransitionToBpm(newTarget, isWrapAround);
+    smoothTransitionToBpm(newTarget, false);
+  }
+
+  function handleTempoTextClick(e) {
+    if (isRunning || isStopping) return;
+    e.stopPropagation();
+    handleTempoTierChange(e.shiftKey ? 'prev' : 'next');
   }
 
   tempoText.addEventListener('click', handleTempoTextClick);
@@ -732,7 +737,7 @@
     isTransitioningBpm = true;
     const startBpm = targetBpm;
     const startTimeAnim = performance.now();
-    const duration = isFastReset ? 300 : 800;
+    const duration = isFastReset ? 150 : 350;
 
     function animateBpmStep(now) {
       if (isRunning || isStopping) {
@@ -794,15 +799,12 @@
     updateUI(visualBpm);
   }
 
-  function setTargetBpm(newBpm) {
-    if (isRunning || isStopping) return;
-    if (isTransitioningBpm) {
-      isTransitioningBpm = false;
-      if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
-    }
+  function updateTargetAndUI(newBpm) {
     targetBpm = Math.max(MIN_BPM, Math.min(MAX_BPM, newBpm));
     bpm = Math.round(targetBpm);
     activeBpm = targetBpm;
+    visualBpm = targetBpm;
+    updateUI(visualBpm);
   }
 
   let isDraggingWeight = false;
@@ -853,10 +855,8 @@
   rodEl.addEventListener('click', toggleClick);
   rodBaseEl.addEventListener('click', toggleClick);
 
-  let isHolding = false;
-  let holdDirection = 0;
-  let holdStartTime = 0;
-  let holdAnimReq = null;
+  let holdTimer = null;
+  let isHoldingActive = false;
 
   function startHold(delta) {
     if (isRunning || isStopping) return;
@@ -864,44 +864,110 @@
       isTransitioningBpm = false;
       if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
     }
-    holdDirection = delta;
-    if (!isHolding) {
-      isHolding = true;
-      holdStartTime = performance.now();
-      setTargetBpm(targetBpm + delta * 1.5);
-      if (holdAnimReq) cancelAnimationFrame(holdAnimReq);
-      holdAnimReq = requestAnimationFrame(holdLoop);
-    }
+
+    updateTargetAndUI(targetBpm + delta);
+    if (targetBpm <= MIN_BPM || targetBpm >= MAX_BPM) return;
+    
+    isHoldingActive = true;
+
+    if (holdTimer) clearTimeout(holdTimer);
+    if (animFrameReq) cancelAnimationFrame(animFrameReq);
+
+    holdTimer = setTimeout(() => {
+      if (!isHoldingActive) return;
+      const holdStartTimeLoop = performance.now();
+
+      function accelerateLoop(timestamp) {
+        if (!isHoldingActive) return;
+        const elapsed = (timestamp - holdStartTimeLoop) / 1000;
+        const speed = Math.min(220, 6 * Math.exp(2.8 * elapsed));
+        const dt = 0.016;
+
+        let nextVal = targetBpm + delta * speed * dt;
+        updateTargetAndUI(nextVal);
+
+        if (targetBpm <= MIN_BPM || targetBpm >= MAX_BPM) {
+          stopHold();
+          return;
+        }
+
+        animFrameReq = requestAnimationFrame(accelerateLoop);
+      }
+      animFrameReq = requestAnimationFrame(accelerateLoop);
+    }, 250);
   }
 
   function stopHold() {
-    isHolding = false;
-    holdDirection = 0;
-    if (holdAnimReq) {
-      cancelAnimationFrame(holdAnimReq);
-      holdAnimReq = null;
+    isHoldingActive = false;
+    if (holdTimer) {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+    if (animFrameReq) {
+      cancelAnimationFrame(animFrameReq);
+      animFrameReq = null;
     }
   }
 
-  function holdLoop(timestamp) {
-    if (!isHolding || isRunning || isStopping) {
-      holdAnimReq = null;
+  let tierHoldTimer = null;
+  let tierAnimFrame = null;
+  let isTierHoldingActive = false;
+
+  function startTierHold(direction) {
+    if (isRunning || isStopping) return;
+    if (isTransitioningBpm) {
+      isTransitioningBpm = false;
+      if (bpmTransitionAnim) cancelAnimationFrame(bpmTransitionAnim);
+    }
+
+    let currentCatIdx = 0;
+    for (let i = 0; i < tempoCategories.length; i++) {
+      if (targetBpm < tempoCategories[i].max) {
+        currentCatIdx = i;
+        break;
+      }
+    }
+    if ((direction === 'prev' && currentCatIdx === 0) || (direction === 'next' && currentCatIdx === tempoCategories.length - 1)) {
       return;
     }
-    const elapsed = (timestamp - holdStartTime) / 1000;
-    const speed = Math.min(45, 12 + elapsed * 35);
-    const dt = 0.016;
 
-    let nextVal = targetBpm + holdDirection * speed * dt;
-    nextVal = Math.max(MIN_BPM, Math.min(MAX_BPM, nextVal));
-    
-    targetBpm = nextVal;
-    bpm = Math.round(targetBpm);
-    activeBpm = targetBpm;
-    visualBpm = targetBpm;
-    updateUI(visualBpm);
+    handleTempoTierChange(direction);
+    isTierHoldingActive = true;
 
-    holdAnimReq = requestAnimationFrame(holdLoop);
+    if (tierHoldTimer) clearTimeout(tierHoldTimer);
+    if (tierAnimFrame) cancelAnimationFrame(tierAnimFrame);
+
+    tierHoldTimer = setTimeout(() => {
+      if (!isTierHoldingActive) return;
+      const startTime = performance.now();
+      let lastStepTime = startTime;
+
+      function tierLoop(timestamp) {
+        if (!isTierHoldingActive) return;
+        const elapsedTotal = (timestamp - startTime) / 1000;
+        const currentInterval = Math.max(20, 140 * Math.exp(-3.2 * elapsedTotal));
+
+        if (timestamp - lastStepTime >= currentInterval) {
+          handleTempoTierChange(direction);
+          lastStepTime = timestamp;
+        }
+
+        tierAnimFrame = requestAnimationFrame(tierLoop);
+      }
+      tierAnimFrame = requestAnimationFrame(tierLoop);
+    }, 100);
+  }
+
+  function stopTierHold() {
+    isTierHoldingActive = false;
+    if (tierHoldTimer) {
+      clearTimeout(tierHoldTimer);
+      tierHoldTimer = null;
+    }
+    if (tierAnimFrame) {
+      cancelAnimationFrame(tierAnimFrame);
+      tierAnimFrame = null;
+    }
   }
 
   function bindHoldButton(btn, delta) {
@@ -929,16 +995,28 @@
     if (e.code === 'Space' || e.key === ' ') {
       if (document.activeElement.tagName === 'INPUT') return;
       e.preventDefault();
-      toggleMetronome();
+      if (!e.repeat) toggleMetronome();
     } else if (!isRunning && !isStopping) {
       if (e.code === 'ArrowUp' || e.key === 'ArrowUp') {
         if (document.activeElement.tagName === 'INPUT') return;
         e.preventDefault();
-        if (!e.repeat) startHold(-1);
+        if (e.repeat) return;
+        startHold(-1);
       } else if (e.code === 'ArrowDown' || e.key === 'ArrowDown') {
         if (document.activeElement.tagName === 'INPUT') return;
         e.preventDefault();
-        if (!e.repeat) startHold(1);
+        if (e.repeat) return;
+        startHold(1);
+      } else if (e.code === 'ArrowRight' || e.key === 'ArrowRight') {
+        if (document.activeElement.tagName === 'INPUT') return;
+        e.preventDefault();
+        if (e.repeat) return;
+        startTierHold('next');
+      } else if (e.code === 'ArrowLeft' || e.key === 'ArrowLeft') {
+        if (document.activeElement.tagName === 'INPUT') return;
+        e.preventDefault();
+        if (e.repeat) return;
+        startTierHold('prev');
       }
     }
   });
@@ -946,6 +1024,8 @@
   window.addEventListener('keyup', (e) => {
     if (e.code === 'ArrowUp' || e.key === 'ArrowUp' || e.code === 'ArrowDown' || e.key === 'ArrowDown') {
       stopHold();
+    } else if (e.code === 'ArrowRight' || e.key === 'ArrowRight' || e.code === 'ArrowLeft' || e.key === 'ArrowLeft') {
+      stopTierHold();
     }
   });
 
@@ -1009,7 +1089,6 @@
       const omega = Math.PI * (bpm / 60);
       const maxAngle = 10 + (240 - bpm) * (14 / 220);
       
-      // Décalage de phase de Math.PI / 2 pour démarrer à l'extrême (sin = 1 ou -1)
       const currentAngle = Math.sin(elapsed * omega + Math.PI / 2) * maxAngle;
 
       pendulum.style.transform = `rotate(${currentAngle}deg)`;
