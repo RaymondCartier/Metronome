@@ -1029,47 +1029,31 @@
     }
   });
 
-  function playAccentSound(time) {
-    const freqs = [2350, 4700, 7050];
-    const gains = [1.6, 0.6, 0.24];
-    
-    freqs.forEach((f, idx) => {
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(f, time);
-
-      gain.gain.setValueAtTime(gains[idx], time);
-      gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.7);
-
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-
-      osc.start(time);
-      osc.stop(time + 0.7);
-    });
-  }
-
   function playSound(time, isAccent) {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
     if (isAccent && accentEnabled) {
-      playAccentSound(time);
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(3200, time);
+      osc.frequency.exponentialRampToValueAtTime(180, time + 0.018);
+
+      gain.gain.setValueAtTime(8.0, time);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + 0.018);
     } else {
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      
       osc.type = 'square';
       osc.frequency.setValueAtTime(2400, time);
       osc.frequency.exponentialRampToValueAtTime(140, time + 0.018);
 
       gain.gain.setValueAtTime(6.4, time);
       gain.gain.exponentialRampToValueAtTime(0.001, time + 0.018);
-
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-
-      osc.start(time);
-      osc.stop(time + 0.018);
     }
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.start(time);
+    osc.stop(time + 0.018);
   }
 
   function scheduler() {
